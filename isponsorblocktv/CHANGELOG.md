@@ -2,6 +2,12 @@
 
 # Changelog
 
+## 2.11.0-ha4
+
+- `ueberspringbar` (aus `isSkippable`, schon beim Start der Werbung bekannt)
+- `werbung_nr`: Werbungen der aktuellen Pause werden mitgezählt
+- `contentVideoId` weitergeben
+
 ## 2.11.0-ha3
 
 - `playerOverlay` aus `remoteSlotsData` dekodieren (Protobuf ohne Schema) und lesbare Texte als Attribut `overlay_texte` + ins Log schreiben – Suche nach Überspring-Zeit und „Werbung X von Y“

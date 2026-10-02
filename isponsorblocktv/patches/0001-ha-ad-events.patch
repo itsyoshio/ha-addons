@@ -1,5 +1,5 @@
 diff --git a/src/iSponsorBlockTV/ytlounge.py b/src/iSponsorBlockTV/ytlounge.py
-index 049e2ff..3dca83e 100644
+index 049e2ff..43ba743 100644
 --- a/src/iSponsorBlockTV/ytlounge.py
 +++ b/src/iSponsorBlockTV/ytlounge.py
 @@ -1,5 +1,6 @@
@@ -113,7 +113,7 @@ index 049e2ff..3dca83e 100644
  class PlaybackState:
      def __init__(self):
          self.currentTime = 0.0
-@@ -71,6 +169,97 @@ class YtLoungeApi(pyytlounge.YtLoungeApi):
+@@ -71,6 +169,109 @@ class YtLoungeApi(pyytlounge.YtLoungeApi):
              self.skip_ads = config.skip_ads
              self.auto_play = config.auto_play
          self._command_mutex = asyncio.Lock()
@@ -139,7 +139,7 @@ index 049e2ff..3dca83e 100644
 +        extra = {}
 +        if raw:
 +            for key in ("duration", "adVideoId", "adTitle", "isBumper", "currentTime",
-+                        "adState", "remoteSlotsData", "adSystem"):
++                        "adState", "adSystem", "contentVideoId"):
 +                if key in raw:
 +                    extra[key] = raw[key]
 +            try:
@@ -162,12 +162,24 @@ index 049e2ff..3dca83e 100644
 +                except Exception as e:
 +                    if self.logger:
 +                        self.logger.warning(f"HA: playerOverlay nicht dekodierbar: {e}")
++            if "isSkippable" in raw:
++                extra["ueberspringbar"] = raw["isSkippable"] == "true"
++            # Werbungen in dieser Pause mitzählen (YouTube liefert keine Gesamtzahl)
++            ad_id = raw.get("adVideoId")
++            if active and ad_id:
++                seen = getattr(self, "_ha_ads_seen", [])
++                if ad_id not in seen:
++                    seen = seen + [ad_id]
++                    self._ha_ads_seen = seen
++                extra["werbung_nr"] = seen.index(ad_id) + 1
 +            if "duration" in raw:
 +                try:
 +                    extra["dauer"] = float(raw["duration"])
 +                except (TypeError, ValueError):
 +                    pass
 +        self._ha_extra = {**getattr(self, "_ha_extra", {}), **extra} if active else {}
++        if not active:
++            self._ha_ads_seen = []
 +        if self._ha_ad_active == active and not (active and (skippable or extra)):
 +            return
 +        self._ha_ad_active = active
@@ -211,7 +223,7 @@ index 049e2ff..3dca83e 100644
  
      async def _handle_playback_state_event(self, event: PlaybackStateEvent) -> None:
          self._playback_state.currentTime = event.current_time
-@@ -160,6 +349,9 @@ class YtLoungeApi(pyytlounge.YtLoungeApi):
+@@ -160,6 +361,9 @@ class YtLoungeApi(pyytlounge.YtLoungeApi):
          # (that way we can get the segments)
          if event_type == "onStateChange":
              data = args[0]
@@ -221,7 +233,7 @@ index 049e2ff..3dca83e 100644
              # print(data)
              # Unmute when the video starts playing
              if self.mute_ads and data["state"] == "1":
-@@ -167,11 +359,24 @@ class YtLoungeApi(pyytlounge.YtLoungeApi):
+@@ -167,11 +371,24 @@ class YtLoungeApi(pyytlounge.YtLoungeApi):
          elif event_type == "nowPlaying":
              data = args[0]
              # Unmute when the video starts playing
@@ -246,7 +258,7 @@ index 049e2ff..3dca83e 100644
              if data["adState"] == "0" and data["currentTime"] != "0":  # Ad is not playing
                  self.logger.info("Ad has ended, unmuting")
                  create_task(self.mute(False, override=True))
-@@ -197,6 +402,14 @@ class YtLoungeApi(pyytlounge.YtLoungeApi):
+@@ -197,6 +414,14 @@ class YtLoungeApi(pyytlounge.YtLoungeApi):
          # #Used to know if an ad is skippable or not
          elif event_type == "adPlaying":
              data = args[0]
