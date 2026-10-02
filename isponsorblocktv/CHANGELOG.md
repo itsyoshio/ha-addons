@@ -2,6 +2,12 @@
 
 # Changelog
 
+## 2.11.0-ha2
+
+- Werbe-Ende zusätzlich über `onStateChange` (Video läuft wieder) erkennen
+- Komplette YouTube-Werbemeldungen im Log (`HA: adPlaying {...}`)
+- Zusätzliche Attribute/Event-Daten, soweit YouTube sie liefert: `dauer`, `werbung_nr`, `werbungen_gesamt`, `adVideoId`, `isBumper` u. a.
+
 ## 2.11.0-ha1
 
 - Fork: meldet Werbe-Start/-Ende an Home Assistant (Event `isponsorblocktv_ad`, Entität `binary_sensor.isponsorblocktv_werbung`)

@@ -1,5 +1,5 @@
 diff --git a/src/iSponsorBlockTV/ytlounge.py b/src/iSponsorBlockTV/ytlounge.py
-index 049e2ff..3924981 100644
+index 049e2ff..46c3997 100644
 --- a/src/iSponsorBlockTV/ytlounge.py
 +++ b/src/iSponsorBlockTV/ytlounge.py
 @@ -1,5 +1,6 @@
@@ -9,7 +9,7 @@ index 049e2ff..3924981 100644
  import sys
  from typing import Any, List
  
-@@ -71,6 +72,56 @@ class YtLoungeApi(pyytlounge.YtLoungeApi):
+@@ -71,6 +72,84 @@ class YtLoungeApi(pyytlounge.YtLoungeApi):
              self.skip_ads = config.skip_ads
              self.auto_play = config.auto_play
          self._command_mutex = asyncio.Lock()
@@ -17,7 +17,9 @@ index 049e2ff..3924981 100644
 +        self._ha_ad_active = None
 +        self._ha_device_name = getattr(config, "join_name", None) or "iSponsorBlockTV"
 +
-+    async def _ha_report_ad(self, active: bool, skippable: bool = False, source: str = "") -> None:
++    async def _ha_report_ad(
++        self, active: bool, skippable: bool = False, source: str = "", raw: dict = None
++    ) -> None:
 +        """Meldet Werbe-Start/-Ende an Home Assistant (Event + binary_sensor).
 +
 +        Nur aktiv, wenn das Add-on Zugriff auf die HA-API hat (SUPERVISOR_TOKEN).
@@ -26,7 +28,30 @@ index 049e2ff..3924981 100644
 +        token = os.environ.get("SUPERVISOR_TOKEN")
 +        if not token or self.session is None:
 +            return
-+        if self._ha_ad_active == active and not (active and skippable):
++        if raw is not None and self.logger:
++            # Fork: komplette YouTube-Meldung loggen, um Felder (Dauer, Slots) zu sehen
++            self.logger.info(f"HA: {source} {json.dumps(raw, ensure_ascii=False)}")
++        extra = {}
++        if raw:
++            for key in ("duration", "adVideoId", "adTitle", "isBumper", "currentTime",
++                        "adState", "remoteSlotsData", "adSystem"):
++                if key in raw:
++                    extra[key] = raw[key]
++            try:
++                slots = json.loads(raw.get("remoteSlotsData") or "{}")
++                if "currentSlot" in slots:
++                    extra["werbung_nr"] = int(slots["currentSlot"])
++                if "totalSlots" in slots:
++                    extra["werbungen_gesamt"] = int(slots["totalSlots"])
++            except Exception:
++                pass
++            if "duration" in raw:
++                try:
++                    extra["dauer"] = float(raw["duration"])
++                except (TypeError, ValueError):
++                    pass
++        self._ha_extra = {**getattr(self, "_ha_extra", {}), **extra} if active else {}
++        if self._ha_ad_active == active and not (active and (skippable or extra)):
 +            return
 +        self._ha_ad_active = active
 +        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
@@ -41,7 +66,9 @@ index 049e2ff..3924981 100644
 +        base = "http://supervisor/core/api"
 +        try:
 +            async with self.session.post(
-+                f"{base}/events/isponsorblocktv_ad", json=payload, headers=headers
++                f"{base}/events/isponsorblocktv_ad",
++                json={**payload, **getattr(self, "_ha_extra", {})},
++                headers=headers
 +            ) as resp:
 +                await resp.read()
 +            async with self.session.post(
@@ -53,6 +80,7 @@ index 049e2ff..3924981 100644
 +                        "device_class": "running",
 +                        "icon": "mdi:advertisements" if active else "mdi:advertisements-off",
 +                        **payload,
++                        **getattr(self, "_ha_extra", {}),
 +                    },
 +                },
 +                headers=headers,
@@ -66,37 +94,51 @@ index 049e2ff..3924981 100644
  
      async def _handle_playback_state_event(self, event: PlaybackStateEvent) -> None:
          self._playback_state.currentTime = event.current_time
-@@ -167,11 +218,23 @@ class YtLoungeApi(pyytlounge.YtLoungeApi):
+@@ -160,6 +239,9 @@ class YtLoungeApi(pyytlounge.YtLoungeApi):
+         # (that way we can get the segments)
+         if event_type == "onStateChange":
+             data = args[0]
++            # Fork: Video läuft wieder (state 1) = Werbung vorbei
++            if data.get("state") == "1" and self._ha_ad_active:
++                create_task(self._ha_report_ad(False, source="onStateChange", raw=data))
+             # print(data)
+             # Unmute when the video starts playing
+             if self.mute_ads and data["state"] == "1":
+@@ -167,11 +249,24 @@ class YtLoungeApi(pyytlounge.YtLoungeApi):
          elif event_type == "nowPlaying":
              data = args[0]
              # Unmute when the video starts playing
 +            if data.get("state", "0") == "1":
-+                create_task(self._ha_report_ad(False, source="nowPlaying"))
++                create_task(self._ha_report_ad(False, source="nowPlaying", raw=data))
              if self.mute_ads and data.get("state", "0") == "1":
                  self.logger.info("Ad has ended, unmuting")
                  create_task(self.mute(False, override=True))
          elif event_type == "onAdStateChange":
              data = args[0]
 +            if data["adState"] == "0" and data["currentTime"] != "0":
-+                create_task(self._ha_report_ad(False, source="onAdStateChange"))
++                create_task(self._ha_report_ad(False, source="onAdStateChange", raw=data))
 +            else:
 +                create_task(
 +                    self._ha_report_ad(
 +                        True,
 +                        skippable=data.get("isSkipEnabled") == "true",
 +                        source="onAdStateChange",
++                        raw=data,
 +                    )
 +                )
              if data["adState"] == "0" and data["currentTime"] != "0":  # Ad is not playing
                  self.logger.info("Ad has ended, unmuting")
                  create_task(self.mute(False, override=True))
-@@ -197,6 +260,11 @@ class YtLoungeApi(pyytlounge.YtLoungeApi):
+@@ -197,6 +292,14 @@ class YtLoungeApi(pyytlounge.YtLoungeApi):
          # #Used to know if an ad is skippable or not
          elif event_type == "adPlaying":
              data = args[0]
 +            create_task(
 +                self._ha_report_ad(
-+                    True, skippable=data.get("isSkipEnabled") == "true", source="adPlaying"
++                    True,
++                    skippable=data.get("isSkipEnabled") == "true",
++                    source="adPlaying",
++                    raw=data,
 +                )
 +            )
              # Gets segments for the next video (after the ad) before it starts playing

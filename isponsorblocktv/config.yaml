@@ -1,6 +1,6 @@
 # https://developers.home-assistant.io/docs/add-ons/configuration#add-on-config
 name: iSponsorBlockTV (HA-Events)
-version: "2.11.0-ha1"
+version: "2.11.0-ha2"
 slug: isponsorblocktv
 description: iSponsorBlockTV mit Werbe-Status für Home Assistant (Event isponsorblocktv_ad + binary_sensor.isponsorblocktv_werbung). Fork von bertybuttface/addons.
 url: "https://github.com/dmunozv04/iSponsorBlockTV"
