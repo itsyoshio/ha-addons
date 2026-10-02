@@ -2,6 +2,10 @@
 
 # Changelog
 
+## 2.11.0-ha5
+
+- Während einer Werbung (und 5 s danach) wird jede YouTube-Lounge-Meldung komplett geloggt (`HA-RAW:`), um Überspring-Countdown o. ä. zu finden
+
 ## 2.11.0-ha4
 
 - `ueberspringbar` (aus `isSkippable`, schon beim Start der Werbung bekannt)
