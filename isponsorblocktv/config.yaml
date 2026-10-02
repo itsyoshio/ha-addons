@@ -1,0 +1,41 @@
+# https://developers.home-assistant.io/docs/add-ons/configuration#add-on-config
+name: iSponsorBlockTV (HA-Events)
+version: "2.11.0-ha1"
+slug: isponsorblocktv
+description: iSponsorBlockTV mit Werbe-Status für Home Assistant (Event isponsorblocktv_ad + binary_sensor.isponsorblocktv_werbung). Fork von bertybuttface/addons.
+url: "https://github.com/dmunozv04/iSponsorBlockTV"
+arch:
+  - aarch64
+  - amd64
+init: false
+homeassistant_api: true
+map:
+  - share:rw
+options:
+  devices: []
+  channel_whitelist: []
+  skip_categories: []
+  skip_count_tracking: false
+  mute_ads: false
+  skip_ads: true
+  auto_play: true
+  minimum_skip_length: 1
+  join_name: "iSponsorBlockTV"
+schema:
+  apikey: password? # get youtube apikey: https://developers.google.com/youtube/registering_an_application
+  devices:
+    - name: str?
+      screen_id: str
+      offset: int?
+  channel_whitelist:
+    - id: str
+      name: str
+  skip_categories:
+    - match(^.*(sponsor|selfpromo|exclusive_access|interaction|poi_highlight|intro|outro|preview|filler|music_offtopic).*$)
+  skip_count_tracking: bool
+  mute_ads: bool
+  skip_ads: bool
+  auto_play: bool
+  minimum_skip_length: int?
+  join_name: str?
+host_network: true
