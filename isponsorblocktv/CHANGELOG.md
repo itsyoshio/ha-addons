@@ -2,6 +2,11 @@
 
 # Changelog
 
+## 2.11.0-ha3
+
+- `playerOverlay` aus `remoteSlotsData` dekodieren (Protobuf ohne Schema) und lesbare Texte als Attribut `overlay_texte` + ins Log schreiben – Suche nach Überspring-Zeit und „Werbung X von Y“
+- Rohdaten-Log kürzt `remoteSlotsData`
+
 ## 2.11.0-ha2
 
 - Werbe-Ende zusätzlich über `onStateChange` (Video läuft wieder) erkennen

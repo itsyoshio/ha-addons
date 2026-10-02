@@ -1,5 +1,5 @@
 diff --git a/src/iSponsorBlockTV/ytlounge.py b/src/iSponsorBlockTV/ytlounge.py
-index 049e2ff..46c3997 100644
+index 049e2ff..3dca83e 100644
 --- a/src/iSponsorBlockTV/ytlounge.py
 +++ b/src/iSponsorBlockTV/ytlounge.py
 @@ -1,5 +1,6 @@
@@ -9,7 +9,111 @@ index 049e2ff..46c3997 100644
  import sys
  from typing import Any, List
  
-@@ -71,6 +72,84 @@ class YtLoungeApi(pyytlounge.YtLoungeApi):
+@@ -17,6 +18,103 @@ from .constants import youtube_client_blacklist
+ create_task = asyncio.create_task
+ 
+ 
++def _pb_decode(buf: bytes, depth: int = 0, max_depth: int = 8):
++    """Minimaler Protobuf-Decoder (ohne Schema) für das playerOverlay-Feld.
++
++    Liefert eine Liste (feldnummer, wert). Längen-Felder werden, wenn möglich,
++    rekursiv dekodiert, sonst als Text (UTF-8) oder Hex zurückgegeben.
++    """
++    out, i, n = [], 0, len(buf)
++
++    def varint(j):
++        shift = val = 0
++        while j < n:
++            b = buf[j]
++            j += 1
++            val |= (b & 0x7F) << shift
++            if not b & 0x80:
++                return val, j
++            shift += 7
++            if shift > 63:
++                break
++        raise ValueError("varint")
++
++    try:
++        while i < n:
++            key, i = varint(i)
++            field, wtype = key >> 3, key & 7
++            if field == 0:
++                raise ValueError("field0")
++            if wtype == 0:
++                v, i = varint(i)
++                out.append((field, v))
++            elif wtype == 1:
++                out.append((field, buf[i:i + 8].hex()))
++                i += 8
++            elif wtype == 5:
++                out.append((field, buf[i:i + 4].hex()))
++                i += 4
++            elif wtype == 2:
++                ln, i = varint(i)
++                chunk = buf[i:i + ln]
++                i += ln
++                if len(chunk) != ln:
++                    raise ValueError("len")
++                sub = None
++                if depth < max_depth and ln > 1:
++                    try:
++                        sub = _pb_decode(chunk, depth + 1, max_depth)
++                    except ValueError:
++                        sub = None
++                text = None
++                try:
++                    text = chunk.decode("utf-8")
++                    if not text.isprintable():
++                        text = None
++                except UnicodeDecodeError:
++                    text = None
++                if text is not None and (sub is None or len(text) < 200):
++                    out.append((field, text))
++                elif sub is not None:
++                    out.append((field, sub))
++                else:
++                    out.append((field, chunk[:32].hex()))
++            else:
++                raise ValueError("wiretype")
++    except IndexError as e:
++        raise ValueError("eof") from e
++    return out
++
++
++def _pb_strings(tree, acc=None):
++    acc = [] if acc is None else acc
++    for _f, v in tree:
++        if isinstance(v, list):
++            _pb_strings(v, acc)
++        elif isinstance(v, str) and len(v) < 120 and not all(c in "0123456789abcdef" for c in v):
++            acc.append(v)
++    return acc
++
++
++def _decode_player_overlay(remote_slots_data: str):
++    """remoteSlotsData -> (Baum, Texte) aus dem base64/URL-codierten playerOverlay."""
++    import base64
++    from urllib.parse import unquote
++
++    slots = json.loads(remote_slots_data or "{}")
++    raw = slots.get("playerOverlay")
++    if not raw:
++        return None, []
++    b64 = unquote(raw)
++    b64 += "=" * (-len(b64) % 4)
++    try:
++        data = base64.urlsafe_b64decode(b64)
++    except Exception:
++        data = base64.b64decode(b64)
++    tree = _pb_decode(data)
++    return tree, _pb_strings(tree)
++
++
+ class PlaybackState:
+     def __init__(self):
+         self.currentTime = 0.0
+@@ -71,6 +169,97 @@ class YtLoungeApi(pyytlounge.YtLoungeApi):
              self.skip_ads = config.skip_ads
              self.auto_play = config.auto_play
          self._command_mutex = asyncio.Lock()
@@ -30,7 +134,8 @@ index 049e2ff..46c3997 100644
 +            return
 +        if raw is not None and self.logger:
 +            # Fork: komplette YouTube-Meldung loggen, um Felder (Dauer, Slots) zu sehen
-+            self.logger.info(f"HA: {source} {json.dumps(raw, ensure_ascii=False)}")
++            short = {k: (v if k != "remoteSlotsData" else f"<{len(v)} Zeichen>") for k, v in raw.items()}
++            self.logger.info(f"HA: {source} {json.dumps(short, ensure_ascii=False)}")
 +        extra = {}
 +        if raw:
 +            for key in ("duration", "adVideoId", "adTitle", "isBumper", "currentTime",
@@ -45,6 +150,18 @@ index 049e2ff..46c3997 100644
 +                    extra["werbungen_gesamt"] = int(slots["totalSlots"])
 +            except Exception:
 +                pass
++            if raw.get("remoteSlotsData") and raw.get("adVideoId") != getattr(self, "_ha_overlay_ad", None):
++                self._ha_overlay_ad = raw.get("adVideoId")
++                try:
++                    tree, texts = _decode_player_overlay(raw["remoteSlotsData"])
++                    if tree is not None:
++                        extra["overlay_texte"] = texts[:30]
++                        if self.logger:
++                            self.logger.info("HA: playerOverlay Texte: " + json.dumps(texts, ensure_ascii=False))
++                            self.logger.info("HA: playerOverlay Baum: " + json.dumps(tree, ensure_ascii=False)[:20000])
++                except Exception as e:
++                    if self.logger:
++                        self.logger.warning(f"HA: playerOverlay nicht dekodierbar: {e}")
 +            if "duration" in raw:
 +                try:
 +                    extra["dauer"] = float(raw["duration"])
@@ -94,7 +211,7 @@ index 049e2ff..46c3997 100644
  
      async def _handle_playback_state_event(self, event: PlaybackStateEvent) -> None:
          self._playback_state.currentTime = event.current_time
-@@ -160,6 +239,9 @@ class YtLoungeApi(pyytlounge.YtLoungeApi):
+@@ -160,6 +349,9 @@ class YtLoungeApi(pyytlounge.YtLoungeApi):
          # (that way we can get the segments)
          if event_type == "onStateChange":
              data = args[0]
@@ -104,7 +221,7 @@ index 049e2ff..46c3997 100644
              # print(data)
              # Unmute when the video starts playing
              if self.mute_ads and data["state"] == "1":
-@@ -167,11 +249,24 @@ class YtLoungeApi(pyytlounge.YtLoungeApi):
+@@ -167,11 +359,24 @@ class YtLoungeApi(pyytlounge.YtLoungeApi):
          elif event_type == "nowPlaying":
              data = args[0]
              # Unmute when the video starts playing
@@ -129,7 +246,7 @@ index 049e2ff..46c3997 100644
              if data["adState"] == "0" and data["currentTime"] != "0":  # Ad is not playing
                  self.logger.info("Ad has ended, unmuting")
                  create_task(self.mute(False, override=True))
-@@ -197,6 +292,14 @@ class YtLoungeApi(pyytlounge.YtLoungeApi):
+@@ -197,6 +402,14 @@ class YtLoungeApi(pyytlounge.YtLoungeApi):
          # #Used to know if an ad is skippable or not
          elif event_type == "adPlaying":
              data = args[0]
