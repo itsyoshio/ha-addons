@@ -2,6 +2,10 @@
 
 # Changelog
 
+## 2.11.0-ha6
+
+- Pro Werbung wird die komplette Meldung inkl. ungekürztem `remoteSlotsData` nach `/share/isponsorblocktv/ads/<zeit>_<adVideoId>.json` geschrieben; alle base64-Felder (`playerOverlay`, `adNextParams`, …) zusätzlich als Protobuf dekodiert
+
 ## 2.11.0-ha5
 
 - Während einer Werbung (und 5 s danach) wird jede YouTube-Lounge-Meldung komplett geloggt (`HA-RAW:`), um Überspring-Countdown o. ä. zu finden

@@ -1,5 +1,5 @@
 diff --git a/src/iSponsorBlockTV/ytlounge.py b/src/iSponsorBlockTV/ytlounge.py
-index 049e2ff..f0351fb 100644
+index 049e2ff..7ee31b4 100644
 --- a/src/iSponsorBlockTV/ytlounge.py
 +++ b/src/iSponsorBlockTV/ytlounge.py
 @@ -1,5 +1,6 @@
@@ -9,7 +9,7 @@ index 049e2ff..f0351fb 100644
  import sys
  from typing import Any, List
  
-@@ -17,6 +18,103 @@ from .constants import youtube_client_blacklist
+@@ -17,6 +18,150 @@ from .constants import youtube_client_blacklist
  create_task = asyncio.create_task
  
  
@@ -110,10 +110,57 @@ index 049e2ff..f0351fb 100644
 +    return tree, _pb_strings(tree)
 +
 +
++def _b64_pb(value: str):
++    """Versucht einen base64/URL-codierten String als Protobuf zu dekodieren."""
++    import base64
++    from urllib.parse import unquote
++
++    b64 = unquote(value)
++    b64 += "=" * (-len(b64) % 4)
++    try:
++        data = base64.urlsafe_b64decode(b64)
++    except Exception:
++        data = base64.b64decode(b64)
++    tree = _pb_decode(data)
++    return tree, _pb_strings(tree)
++
++
++_HA_DUMP_DIR = "/share/isponsorblocktv/ads"
++
++
++def _dump_ad_raw(raw: dict, source: str) -> str:
++    """Fork: komplette Werbe-Meldung (inkl. ungekürztem remoteSlotsData) als JSON
++    nach /share schreiben und jedes base64-Feld zusätzlich dekodiert ablegen."""
++    import time
++
++    os.makedirs(_HA_DUMP_DIR, exist_ok=True)
++    out = {"source": source, "zeit": time.strftime("%Y-%m-%d %H:%M:%S"), "raw": raw}
++    try:
++        slots = json.loads(raw.get("remoteSlotsData") or "{}")
++    except Exception as e:
++        slots = {}
++        out["slots_fehler"] = str(e)
++    out["slots"] = slots
++    decoded = {}
++    for key, val in slots.items():
++        if isinstance(val, str) and len(val) > 16:
++            try:
++                tree, texts = _b64_pb(val)
++                decoded[key] = {"texte": texts, "baum": tree}
++            except Exception as e:
++                decoded[key] = {"fehler": str(e)}
++    out["dekodiert"] = decoded
++    name = f"{time.strftime('%Y%m%d-%H%M%S')}_{raw.get('adVideoId') or 'unbekannt'}.json"
++    path = os.path.join(_HA_DUMP_DIR, name)
++    with open(path, "w", encoding="utf-8") as fh:
++        json.dump(out, fh, ensure_ascii=False, indent=1, default=str)
++    return path
++
++
  class PlaybackState:
      def __init__(self):
          self.currentTime = 0.0
-@@ -71,6 +169,113 @@ class YtLoungeApi(pyytlounge.YtLoungeApi):
+@@ -71,6 +216,120 @@ class YtLoungeApi(pyytlounge.YtLoungeApi):
              self.skip_ads = config.skip_ads
              self.auto_play = config.auto_play
          self._command_mutex = asyncio.Lock()
@@ -162,6 +209,13 @@ index 049e2ff..f0351fb 100644
 +                except Exception as e:
 +                    if self.logger:
 +                        self.logger.warning(f"HA: playerOverlay nicht dekodierbar: {e}")
++                try:
++                    path = _dump_ad_raw(raw, source)
++                    if self.logger:
++                        self.logger.info(f"HA: Werbe-Rohdaten gespeichert: {path}")
++                except Exception as e:
++                    if self.logger:
++                        self.logger.warning(f"HA: Werbe-Rohdaten nicht gespeichert: {e}")
 +            if "isSkippable" in raw:
 +                extra["ueberspringbar"] = raw["isSkippable"] == "true"
 +            # Werbungen in dieser Pause mitzählen (YouTube liefert keine Gesamtzahl)
@@ -227,7 +281,7 @@ index 049e2ff..f0351fb 100644
  
      async def _handle_playback_state_event(self, event: PlaybackStateEvent) -> None:
          self._playback_state.currentTime = event.current_time
-@@ -152,6 +357,17 @@ class YtLoungeApi(pyytlounge.YtLoungeApi):
+@@ -152,6 +411,17 @@ class YtLoungeApi(pyytlounge.YtLoungeApi):
      # skipcq: PY-R1000
      async def _process_event(self, event_type: str, args: List[Any]):
          self.logger.debug(f"process_event({event_type}, {args})")
@@ -245,7 +299,7 @@ index 049e2ff..f0351fb 100644
          # Update last event time for the watchdog
          self.last_event_time = asyncio.get_running_loop().time()
  
-@@ -160,6 +376,9 @@ class YtLoungeApi(pyytlounge.YtLoungeApi):
+@@ -160,6 +430,9 @@ class YtLoungeApi(pyytlounge.YtLoungeApi):
          # (that way we can get the segments)
          if event_type == "onStateChange":
              data = args[0]
@@ -255,7 +309,7 @@ index 049e2ff..f0351fb 100644
              # print(data)
              # Unmute when the video starts playing
              if self.mute_ads and data["state"] == "1":
-@@ -167,11 +386,24 @@ class YtLoungeApi(pyytlounge.YtLoungeApi):
+@@ -167,11 +440,24 @@ class YtLoungeApi(pyytlounge.YtLoungeApi):
          elif event_type == "nowPlaying":
              data = args[0]
              # Unmute when the video starts playing
@@ -280,7 +334,7 @@ index 049e2ff..f0351fb 100644
              if data["adState"] == "0" and data["currentTime"] != "0":  # Ad is not playing
                  self.logger.info("Ad has ended, unmuting")
                  create_task(self.mute(False, override=True))
-@@ -197,6 +429,14 @@ class YtLoungeApi(pyytlounge.YtLoungeApi):
+@@ -197,6 +483,14 @@ class YtLoungeApi(pyytlounge.YtLoungeApi):
          # #Used to know if an ad is skippable or not
          elif event_type == "adPlaying":
              data = args[0]
