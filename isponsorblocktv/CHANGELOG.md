@@ -2,6 +2,11 @@
 
 # Changelog
 
+## 2.11.0-ha7
+
+- Fix: Werbung per BACK verlassen (oder YouTube startet mit Werbung ohne Video danach) meldet jetzt „Werbung aus“ – erkannt an `onStateChange` 0/5 bzw. `nowPlaying` ohne `videoId`. Vorher blieb `binary_sensor.isponsorblocktv_werbung` an, bis das nächste Video lief (bzw. bis zum 3-Minuten-Sicherheitsnetz).
+- Fix: `onAdStateChange` mit `adState` 0 und `currentTime` 0 meldet nicht mehr fälschlich „Werbung an“
+
 ## 2.11.0-ha6
 
 - Pro Werbung wird die komplette Meldung inkl. ungekürztem `remoteSlotsData` nach `/share/isponsorblocktv/ads/<zeit>_<adVideoId>.json` geschrieben; alle base64-Felder (`playerOverlay`, `adNextParams`, …) zusätzlich als Protobuf dekodiert

@@ -1,5 +1,5 @@
 diff --git a/src/iSponsorBlockTV/ytlounge.py b/src/iSponsorBlockTV/ytlounge.py
-index 049e2ff..7ee31b4 100644
+index 049e2ff..693ec81 100644
 --- a/src/iSponsorBlockTV/ytlounge.py
 +++ b/src/iSponsorBlockTV/ytlounge.py
 @@ -1,5 +1,6 @@
@@ -299,22 +299,35 @@ index 049e2ff..7ee31b4 100644
          # Update last event time for the watchdog
          self.last_event_time = asyncio.get_running_loop().time()
  
-@@ -160,6 +430,9 @@ class YtLoungeApi(pyytlounge.YtLoungeApi):
+@@ -160,6 +430,16 @@ class YtLoungeApi(pyytlounge.YtLoungeApi):
          # (that way we can get the segments)
          if event_type == "onStateChange":
              data = args[0]
 +            # Fork: Video läuft wieder (state 1) = Werbung vorbei
 +            if data.get("state") == "1" and self._ha_ad_active:
 +                create_task(self._ha_report_ad(False, source="onStateChange", raw=data))
++            # Fork: Werbung per BACK verlassen / YouTube startete mit Werbung ohne
++            # Video danach: Player geht auf "beendet" (0) oder "cued" (5) statt
++            # auf "läuft" (1). Zwischen zwei Werbungen kommt nur -1/3/1081.
++            elif data.get("state") in ("0", "5") and self._ha_ad_active:
++                create_task(
++                    self._ha_report_ad(False, source="onStateChange-verlassen", raw=data)
++                )
              # print(data)
              # Unmute when the video starts playing
              if self.mute_ads and data["state"] == "1":
-@@ -167,11 +440,24 @@ class YtLoungeApi(pyytlounge.YtLoungeApi):
+@@ -167,11 +447,33 @@ class YtLoungeApi(pyytlounge.YtLoungeApi):
          elif event_type == "nowPlaying":
              data = args[0]
              # Unmute when the video starts playing
 +            if data.get("state", "0") == "1":
 +                create_task(self._ha_report_ad(False, source="nowPlaying", raw=data))
++            # Fork: nowPlaying ohne videoId = nichts mehr im Player (Werbung per
++            # BACK verlassen) -> Werbung vorbei
++            elif not data.get("videoId") and self._ha_ad_active:
++                create_task(
++                    self._ha_report_ad(False, source="nowPlaying-leer", raw=data)
++                )
              if self.mute_ads and data.get("state", "0") == "1":
                  self.logger.info("Ad has ended, unmuting")
                  create_task(self.mute(False, override=True))
@@ -322,7 +335,10 @@ index 049e2ff..7ee31b4 100644
              data = args[0]
 +            if data["adState"] == "0" and data["currentTime"] != "0":
 +                create_task(self._ha_report_ad(False, source="onAdStateChange", raw=data))
-+            else:
++            # Fork: adState 0 mit currentTime 0 kommt zwischen zwei Werbungen UND beim
++            # Verlassen per BACK -> weder an noch aus melden (sonst schaltet BACK die
++            # Werbung kurz wieder an)
++            elif data["adState"] != "0":
 +                create_task(
 +                    self._ha_report_ad(
 +                        True,
@@ -334,7 +350,7 @@ index 049e2ff..7ee31b4 100644
              if data["adState"] == "0" and data["currentTime"] != "0":  # Ad is not playing
                  self.logger.info("Ad has ended, unmuting")
                  create_task(self.mute(False, override=True))
-@@ -197,6 +483,14 @@ class YtLoungeApi(pyytlounge.YtLoungeApi):
+@@ -197,6 +499,14 @@ class YtLoungeApi(pyytlounge.YtLoungeApi):
          # #Used to know if an ad is skippable or not
          elif event_type == "adPlaying":
              data = args[0]
