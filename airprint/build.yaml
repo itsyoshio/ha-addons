@@ -1,0 +1,8 @@
+# Baut auf dem fertigen Original-Image auf (alle Treiber schon drin) und ersetzt nur die gepatchten Skripte.
+build_from:
+  amd64: "ghcr.io/aaronfagan/ha-airprint/airprint:1.12.0"
+  aarch64: "ghcr.io/aaronfagan/ha-airprint/airprint:1.12.0"
+labels:
+  org.opencontainers.image.title: "AirPrint (gepatcht)"
+  org.opencontainers.image.source: "https://github.com/aaronfagan/ha-airprint"
+  org.opencontainers.image.licenses: "MIT"

@@ -1,0 +1,31 @@
+name: AirPrint (gepatcht)
+version: "1.12.0-ha1"
+slug: airprint
+description: >-
+  AirPrint-Brücke für Netzwerkdrucker ohne AirPrint. Fork von aaronfagan/ha-airprint 1.12.0 mit Fix:
+  per IP eingetragene Drucker bekommen ihren Treiber (SNMP-Geräte-ID, Name oder PPD), Treiberpakete werden am Inhalt erkannt.
+url: https://github.com/aaronfagan/ha-airprint
+arch:
+  - amd64
+  - aarch64
+init: true
+boot: auto
+startup: services
+host_network: true
+homeassistant_api: true
+ports:
+  8099/tcp: 8099
+ports_description:
+  8099/tcp: Printer status API, used by the AirPrint integration
+map:
+  - addon_config:rw
+  - share:rw
+options:
+  printers: []
+schema:
+  printers:
+    - icon: list(🖨️|📠|📄|📁|☁️|🏢|🏠)?
+      name: str
+      location: str?
+      device: str?
+      driver: url?

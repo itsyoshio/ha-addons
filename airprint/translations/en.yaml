@@ -1,0 +1,4 @@
+configuration:
+  printers:
+    name: Printers
+    description: Managed in Settings → Devices & Services → AirPrint. Anything changed here is overwritten.
