@@ -2,6 +2,10 @@
 
 # Changelog
 
+## 2.11.0-ha8
+
+- `video_id` am `binary_sensor.isponsorblocktv_werbung` folgt jetzt jedem neuen Video (`nowPlaying` mit `videoId`), auch ohne Werbewechsel. Nur der Sensor wird aktualisiert, kein Event `isponsorblocktv_ad`; Zustand und Werbe-Attribute bleiben. Damit kann HA das Video-Vorschaubild als Cover nutzen (Apple-TV-YouTube liefert kein `entity_picture`).
+
 ## 2.11.0-ha7
 
 - Fix: Werbung per BACK verlassen (oder YouTube startet mit Werbung ohne Video danach) meldet jetzt „Werbung aus“ – erkannt an `onStateChange` 0/5 bzw. `nowPlaying` ohne `videoId`. Vorher blieb `binary_sensor.isponsorblocktv_werbung` an, bis das nächste Video lief (bzw. bis zum 3-Minuten-Sicherheitsnetz).

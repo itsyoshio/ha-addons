@@ -1,5 +1,5 @@
 diff --git a/src/iSponsorBlockTV/ytlounge.py b/src/iSponsorBlockTV/ytlounge.py
-index 049e2ff..693ec81 100644
+index 049e2ff..ec589e3 100644
 --- a/src/iSponsorBlockTV/ytlounge.py
 +++ b/src/iSponsorBlockTV/ytlounge.py
 @@ -1,5 +1,6 @@
@@ -160,7 +160,7 @@ index 049e2ff..693ec81 100644
  class PlaybackState:
      def __init__(self):
          self.currentTime = 0.0
-@@ -71,6 +216,120 @@ class YtLoungeApi(pyytlounge.YtLoungeApi):
+@@ -71,6 +216,132 @@ class YtLoungeApi(pyytlounge.YtLoungeApi):
              self.skip_ads = config.skip_ads
              self.auto_play = config.auto_play
          self._command_mutex = asyncio.Lock()
@@ -238,9 +238,17 @@ index 049e2ff..693ec81 100644
 +                self._ha_ad_end_time = asyncio.get_running_loop().time()
 +            except RuntimeError:
 +                pass
++        # Fork (ha8): Video-ID mitliefern, auch ohne Werbewechsel (Vorschaubild als Cover in HA)
++        vid = (raw or {}).get("videoId") or getattr(self._playback_state, "videoId", "") or ""
++        if raw is not None and "videoId" in raw and not raw.get("videoId"):
++            vid = ""
++        only_video = False
 +        if self._ha_ad_active == active and not (active and (skippable or extra)):
-+            return
++            if active or vid == getattr(self, "_ha_video_id", None):
++                return
++            only_video = True  # nur neue Video-ID: Sensor-Attribut, kein Event
 +        self._ha_ad_active = active
++        self._ha_video_id = vid
 +        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 +        screen = getattr(self, "screen_name", None) or ""
 +        payload = {
@@ -248,16 +256,17 @@ index 049e2ff..693ec81 100644
 +            "skippable": skippable,
 +            "source": source,
 +            "screen_name": screen,
-+            "video_id": getattr(self._playback_state, "videoId", ""),
++            "video_id": vid,
 +        }
 +        base = "http://supervisor/core/api"
 +        try:
-+            async with self.session.post(
-+                f"{base}/events/isponsorblocktv_ad",
-+                json={**payload, **getattr(self, "_ha_extra", {})},
-+                headers=headers
-+            ) as resp:
-+                await resp.read()
++            if not only_video:
++                async with self.session.post(
++                    f"{base}/events/isponsorblocktv_ad",
++                    json={**payload, **getattr(self, "_ha_extra", {})},
++                    headers=headers
++                ) as resp:
++                    await resp.read()
 +            async with self.session.post(
 +                f"{base}/states/binary_sensor.isponsorblocktv_werbung",
 +                json={
@@ -274,14 +283,17 @@ index 049e2ff..693ec81 100644
 +            ) as resp:
 +                await resp.read()
 +            if self.logger:
-+                self.logger.info(f"HA: Werbung {'an' if active else 'aus'} ({source})")
++                if only_video:
++                    self.logger.info(f"HA: Video {vid or '-'} ({source})")
++                else:
++                    self.logger.info(f"HA: Werbung {'an' if active else 'aus'} ({source})")
 +        except Exception as e:  # HA nicht erreichbar darf nie das Skippen stören
 +            if self.logger:
 +                self.logger.warning(f"HA: Meldung fehlgeschlagen: {e}")
  
      async def _handle_playback_state_event(self, event: PlaybackStateEvent) -> None:
          self._playback_state.currentTime = event.current_time
-@@ -152,6 +411,17 @@ class YtLoungeApi(pyytlounge.YtLoungeApi):
+@@ -152,6 +423,17 @@ class YtLoungeApi(pyytlounge.YtLoungeApi):
      # skipcq: PY-R1000
      async def _process_event(self, event_type: str, args: List[Any]):
          self.logger.debug(f"process_event({event_type}, {args})")
@@ -299,7 +311,7 @@ index 049e2ff..693ec81 100644
          # Update last event time for the watchdog
          self.last_event_time = asyncio.get_running_loop().time()
  
-@@ -160,6 +430,16 @@ class YtLoungeApi(pyytlounge.YtLoungeApi):
+@@ -160,6 +442,16 @@ class YtLoungeApi(pyytlounge.YtLoungeApi):
          # (that way we can get the segments)
          if event_type == "onStateChange":
              data = args[0]
@@ -316,7 +328,7 @@ index 049e2ff..693ec81 100644
              # print(data)
              # Unmute when the video starts playing
              if self.mute_ads and data["state"] == "1":
-@@ -167,11 +447,33 @@ class YtLoungeApi(pyytlounge.YtLoungeApi):
+@@ -167,11 +459,36 @@ class YtLoungeApi(pyytlounge.YtLoungeApi):
          elif event_type == "nowPlaying":
              data = args[0]
              # Unmute when the video starts playing
@@ -328,6 +340,9 @@ index 049e2ff..693ec81 100644
 +                create_task(
 +                    self._ha_report_ad(False, source="nowPlaying-leer", raw=data)
 +                )
++            # Fork (ha8): neues Video ohne Werbung -> Video-ID an HA
++            elif data.get("videoId") and not self._ha_ad_active:
++                create_task(self._ha_report_ad(False, source="nowPlaying-video", raw=data))
              if self.mute_ads and data.get("state", "0") == "1":
                  self.logger.info("Ad has ended, unmuting")
                  create_task(self.mute(False, override=True))
@@ -350,7 +365,7 @@ index 049e2ff..693ec81 100644
              if data["adState"] == "0" and data["currentTime"] != "0":  # Ad is not playing
                  self.logger.info("Ad has ended, unmuting")
                  create_task(self.mute(False, override=True))
-@@ -197,6 +499,14 @@ class YtLoungeApi(pyytlounge.YtLoungeApi):
+@@ -197,6 +514,14 @@ class YtLoungeApi(pyytlounge.YtLoungeApi):
          # #Used to know if an ad is skippable or not
          elif event_type == "adPlaying":
              data = args[0]
