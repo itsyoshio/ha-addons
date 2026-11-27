@@ -2,6 +2,10 @@
 
 # Changelog
 
+## 2.11.0-ha9
+
+- Fix: `binary_sensor.isponsorblocktv_werbung` fehlte nach jedem HA-Neustart, bis das nächste Video oder die nächste Werbung kam (per API gesetzte Zustände vergisst HA beim Neustart). Das Add-on prüft jetzt jede Minute und legt den Sensor mit dem letzten Stand neu an, beim Add-on-Start als „aus“.
+
 ## 2.11.0-ha8
 
 - `video_id` am `binary_sensor.isponsorblocktv_werbung` folgt jetzt jedem neuen Video (`nowPlaying` mit `videoId`), auch ohne Werbewechsel. Nur der Sensor wird aktualisiert, kein Event `isponsorblocktv_ad`; Zustand und Werbe-Attribute bleiben. Damit kann HA das Video-Vorschaubild als Cover nutzen (Apple-TV-YouTube liefert kein `entity_picture`).

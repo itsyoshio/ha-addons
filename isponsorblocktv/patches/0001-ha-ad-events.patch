@@ -1,5 +1,18 @@
+diff --git a/src/iSponsorBlockTV/main.py b/src/iSponsorBlockTV/main.py
+index e219f21..ca2e812 100644
+--- a/src/iSponsorBlockTV/main.py
++++ b/src/iSponsorBlockTV/main.py
+@@ -185,6 +185,8 @@ async def main_async(config, debug, http_tracing):
+         await device.initialize_web_session()
+         tasks.append(loop.create_task(device.loop()))
+         tasks.append(loop.create_task(device.refresh_auth_loop()))
++        # Fork: Werbe-Sensor in HA nach HA-Neustarts neu anlegen
++        tasks.append(loop.create_task(device.lounge_controller.ha_keepalive_loop()))
+     signal(SIGTERM, handle_signal)
+     signal(SIGINT, handle_signal)
+     try:
 diff --git a/src/iSponsorBlockTV/ytlounge.py b/src/iSponsorBlockTV/ytlounge.py
-index 049e2ff..ec589e3 100644
+index 049e2ff..ab28e04 100644
 --- a/src/iSponsorBlockTV/ytlounge.py
 +++ b/src/iSponsorBlockTV/ytlounge.py
 @@ -1,5 +1,6 @@
@@ -9,10 +22,15 @@ index 049e2ff..ec589e3 100644
  import sys
  from typing import Any, List
  
-@@ -17,6 +18,150 @@ from .constants import youtube_client_blacklist
+@@ -16,6 +17,154 @@ from .constants import youtube_client_blacklist
+ 
  create_task = asyncio.create_task
  
- 
++# Fork: Home-Assistant-API über den Supervisor und der gemeldete Sensor
++HA_API = "http://supervisor/core/api"
++HA_ENTITY = "binary_sensor.isponsorblocktv_werbung"
++
++
 +def _pb_decode(buf: bytes, depth: int = 0, max_depth: int = 8):
 +    """Minimaler Protobuf-Decoder (ohne Schema) für das playerOverlay-Feld.
 +
@@ -156,11 +174,10 @@ index 049e2ff..ec589e3 100644
 +        json.dump(out, fh, ensure_ascii=False, indent=1, default=str)
 +    return path
 +
-+
+ 
  class PlaybackState:
      def __init__(self):
-         self.currentTime = 0.0
-@@ -71,6 +216,132 @@ class YtLoungeApi(pyytlounge.YtLoungeApi):
+@@ -71,6 +220,172 @@ class YtLoungeApi(pyytlounge.YtLoungeApi):
              self.skip_ads = config.skip_ads
              self.auto_play = config.auto_play
          self._command_mutex = asyncio.Lock()
@@ -258,30 +275,16 @@ index 049e2ff..ec589e3 100644
 +            "screen_name": screen,
 +            "video_id": vid,
 +        }
-+        base = "http://supervisor/core/api"
++        self._ha_payload = payload
 +        try:
 +            if not only_video:
 +                async with self.session.post(
-+                    f"{base}/events/isponsorblocktv_ad",
++                    f"{HA_API}/events/isponsorblocktv_ad",
 +                    json={**payload, **getattr(self, "_ha_extra", {})},
 +                    headers=headers
 +                ) as resp:
 +                    await resp.read()
-+            async with self.session.post(
-+                f"{base}/states/binary_sensor.isponsorblocktv_werbung",
-+                json={
-+                    "state": "on" if active else "off",
-+                    "attributes": {
-+                        "friendly_name": "YouTube-Werbung (iSponsorBlockTV)",
-+                        "device_class": "running",
-+                        "icon": "mdi:advertisements" if active else "mdi:advertisements-off",
-+                        **payload,
-+                        **getattr(self, "_ha_extra", {}),
-+                    },
-+                },
-+                headers=headers,
-+            ) as resp:
-+                await resp.read()
++            await self._ha_post_state(headers)
 +            if self.logger:
 +                if only_video:
 +                    self.logger.info(f"HA: Video {vid or '-'} ({source})")
@@ -290,10 +293,64 @@ index 049e2ff..ec589e3 100644
 +        except Exception as e:  # HA nicht erreichbar darf nie das Skippen stören
 +            if self.logger:
 +                self.logger.warning(f"HA: Meldung fehlgeschlagen: {e}")
++
++    async def _ha_post_state(self, headers: dict) -> None:
++        """Schreibt den aktuellen Stand nach binary_sensor.isponsorblocktv_werbung."""
++        active = bool(self._ha_ad_active)
++        payload = getattr(self, "_ha_payload", None) or {
++            "active": False,
++            "skippable": False,
++            "source": "start",
++            "screen_name": getattr(self, "screen_name", None) or "",
++            "video_id": getattr(self, "_ha_video_id", "") or "",
++        }
++        async with self.session.post(
++            f"{HA_API}/states/{HA_ENTITY}",
++            json={
++                "state": "on" if active else "off",
++                "attributes": {
++                    "friendly_name": "YouTube-Werbung (iSponsorBlockTV)",
++                    "device_class": "running",
++                    "icon": "mdi:advertisements" if active else "mdi:advertisements-off",
++                    **payload,
++                    **getattr(self, "_ha_extra", {}),
++                },
++            },
++            headers=headers,
++        ) as resp:
++            await resp.read()
++
++    async def ha_keepalive_loop(self) -> None:
++        """Hält den Sensor in HA am Leben.
++
++        HA vergisst per API gesetzte Zustände bei jedem Neustart. Ohne diese Schleife
++        fehlte der Sensor danach, bis das nächste Video oder die nächste Werbung kam.
++        Prüft jede Minute und legt ihn mit dem letzten Stand neu an, wenn er fehlt.
++        """
++        token = os.environ.get("SUPERVISOR_TOKEN")
++        if not token:
++            return
++        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
++        while True:
++            try:
++                if getattr(self, "session", None) is not None:
++                    async with self.session.get(
++                        f"{HA_API}/states/{HA_ENTITY}", headers=headers
++                    ) as resp:
++                        missing = resp.status == 404
++                        await resp.read()
++                    if missing:
++                        await self._ha_post_state(headers)
++                        if self.logger:
++                            self.logger.info("HA: Sensor fehlte (HA-Neustart?), neu angelegt")
++            except Exception as e:  # HA startet gerade neu o. ä.
++                if self.logger:
++                    self.logger.debug(f"HA: Sensor-Prüfung fehlgeschlagen: {e}")
++            await asyncio.sleep(60)
  
      async def _handle_playback_state_event(self, event: PlaybackStateEvent) -> None:
          self._playback_state.currentTime = event.current_time
-@@ -152,6 +423,17 @@ class YtLoungeApi(pyytlounge.YtLoungeApi):
+@@ -152,6 +467,17 @@ class YtLoungeApi(pyytlounge.YtLoungeApi):
      # skipcq: PY-R1000
      async def _process_event(self, event_type: str, args: List[Any]):
          self.logger.debug(f"process_event({event_type}, {args})")
@@ -311,7 +368,7 @@ index 049e2ff..ec589e3 100644
          # Update last event time for the watchdog
          self.last_event_time = asyncio.get_running_loop().time()
  
-@@ -160,6 +442,16 @@ class YtLoungeApi(pyytlounge.YtLoungeApi):
+@@ -160,6 +486,16 @@ class YtLoungeApi(pyytlounge.YtLoungeApi):
          # (that way we can get the segments)
          if event_type == "onStateChange":
              data = args[0]
@@ -328,7 +385,7 @@ index 049e2ff..ec589e3 100644
              # print(data)
              # Unmute when the video starts playing
              if self.mute_ads and data["state"] == "1":
-@@ -167,11 +459,36 @@ class YtLoungeApi(pyytlounge.YtLoungeApi):
+@@ -167,11 +503,36 @@ class YtLoungeApi(pyytlounge.YtLoungeApi):
          elif event_type == "nowPlaying":
              data = args[0]
              # Unmute when the video starts playing
@@ -365,7 +422,7 @@ index 049e2ff..ec589e3 100644
              if data["adState"] == "0" and data["currentTime"] != "0":  # Ad is not playing
                  self.logger.info("Ad has ended, unmuting")
                  create_task(self.mute(False, override=True))
-@@ -197,6 +514,14 @@ class YtLoungeApi(pyytlounge.YtLoungeApi):
+@@ -197,6 +558,14 @@ class YtLoungeApi(pyytlounge.YtLoungeApi):
          # #Used to know if an ad is skippable or not
          elif event_type == "adPlaying":
              data = args[0]
